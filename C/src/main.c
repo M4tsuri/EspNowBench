@@ -31,9 +31,11 @@
 #include "esp_crc.h"
 #include "espnow_bench.h"
 
+#define BENCH_UNICAST 1
+
 #define ESPNOW_MAXDELAY 512
 
-#define CONFIG_ESPNOW_CHANNEL				1
+#define CONFIG_ESPNOW_CHANNEL				0
 #define ESPNOW_WIFI_MODE 					WIFI_MODE_STA
 #define ESPNOW_WIFI_IF 						ESP_IF_WIFI_STA
 #define MAX_ESPNOW_PACKET_SIZE				250
@@ -42,9 +44,11 @@ static const char *TAG = "espnow_example";
 
 static QueueHandle_t s_example_espnow_queue;
 
+#if BENCH_UNICAST == 1
 static uint8_t s_example_peer_mac[ESP_NOW_ETH_ALEN] = { 16, 145, 168, 59, 157, 28 };
+#endif
 static uint8_t s_example_broadcast_mac[ESP_NOW_ETH_ALEN] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
-static uint8_t s_example_broadcast_data[1] = { 0x0 };
+static uint8_t s_example_broadcast_data[4] = { 0xde, 0xad, 0xbe, 0xef };
 
 static void esp_now_bench_espnow_deinit();
 
@@ -133,7 +137,15 @@ static void example_espnow_task()
     
     int cnt = 0;
     int err_cnt = 0;
-    if (esp_now_send(s_example_peer_mac, s_example_broadcast_data, 1) != ESP_OK) {
+
+    #if BENCH_UNICAST == 1
+    ESP_LOGI(TAG, "benching unicast.");
+    uint8_t *addr = s_example_peer_mac;
+    #else
+    uint8_t *addr = s_example_broadcast_mac;
+    #endif
+
+    if (esp_now_send(addr, s_example_broadcast_data, 4) != ESP_OK) {
         ESP_LOGE(TAG, "Send error");
         esp_now_bench_espnow_deinit();
         vTaskDelete(NULL);
@@ -143,7 +155,7 @@ static void example_espnow_task()
         switch (evt.id) {
             case EXAMPLE_ESPNOW_SEND_CB:
             {
-                if (evt.info.send_cb.status == 0) {
+                if (evt.info.send_cb.status == ESP_NOW_SEND_FAIL) {
                     err_cnt++;
                 }
                 cnt++;
@@ -161,7 +173,7 @@ static void example_espnow_task()
                 gettimeofday(&tv_now, NULL);
                 before = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
                 /* Send the next data after the previous data is sent. */
-                if (esp_now_send(s_example_peer_mac, s_example_broadcast_data, 1) != ESP_OK) {
+                if (esp_now_send(addr, s_example_broadcast_data, 4) != ESP_OK) {
                     ESP_LOGE(TAG, "Send error");
                     esp_now_bench_espnow_deinit();
                     vTaskDelete(NULL);
@@ -206,8 +218,10 @@ static esp_err_t esp_now_bench_espnow_init(void)
     peer->encrypt = false;
     memcpy(peer->peer_addr, s_example_broadcast_mac, ESP_NOW_ETH_ALEN);
     ESP_ERROR_CHECK( esp_now_add_peer(peer) );
+    #if BENCH_UNICAST == 1
     memcpy(peer->peer_addr, s_example_peer_mac, ESP_NOW_ETH_ALEN);
     ESP_ERROR_CHECK( esp_now_add_peer(peer) );
+    #endif
     free(peer);
 
     xTaskCreate(example_espnow_task, "example_espnow_task", 2048, NULL, 4, NULL);
