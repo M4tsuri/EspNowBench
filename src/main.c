@@ -42,26 +42,52 @@ static const char *TAG = "espnow_example";
 
 static QueueHandle_t s_example_espnow_queue;
 
-static uint8_t s_example_broadcast_mac[ESP_NOW_ETH_ALEN] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
-static uint8_t s_example_broadcast_data[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+static uint8_t s_example_peer_mac[ESP_NOW_ETH_ALEN] = { 16, 145, 168, 59, 157, 28 };
+static uint8_t s_example_broadcast_mac[ESP_NOW_ETH_ALEN] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+static uint8_t s_example_broadcast_data[1] = { 0x0 };
 
 static void esp_now_bench_espnow_deinit();
+
+extern const wpa_crypto_funcs_t g_wifi_default_wpa_crypto_funcs;
 
 /* WiFi should start before using ESPNOW */
 static void esp_now_bench_wifi_init(void)
 {
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    // ESP_ERROR_CHECK(esp_netif_init());
+    // ESP_ERROR_CHECK(esp_event_loop_create_default());
+    wifi_init_config_t cfg = { \
+        .osi_funcs = &g_wifi_osi_funcs, \
+        .wpa_crypto_funcs = g_wifi_default_wpa_crypto_funcs, \
+        .static_rx_buf_num = CONFIG_ESP32_WIFI_STATIC_RX_BUFFER_NUM,\
+        .dynamic_rx_buf_num = CONFIG_ESP32_WIFI_DYNAMIC_RX_BUFFER_NUM,\
+        .tx_buf_type = CONFIG_ESP32_WIFI_TX_BUFFER_TYPE,\
+        .static_tx_buf_num = WIFI_STATIC_TX_BUFFER_NUM,\
+        .dynamic_tx_buf_num = WIFI_DYNAMIC_TX_BUFFER_NUM,\
+        .cache_tx_buf_num = WIFI_CACHE_TX_BUFFER_NUM,\
+        .csi_enable = 1,\
+        .ampdu_rx_enable = 0,\
+        .ampdu_tx_enable = 0,\
+        .amsdu_tx_enable = 0,\
+        .nvs_enable = 0,\
+        .nano_enable = WIFI_NANO_FORMAT_ENABLED,\
+        .rx_ba_win = WIFI_DEFAULT_RX_BA_WIN,\
+        .wifi_task_core_id = WIFI_TASK_CORE_ID,\
+        .beacon_max_len = WIFI_SOFTAP_BEACON_MAX_LEN, \
+        .mgmt_sbuf_num = WIFI_MGMT_SBUF_NUM, \
+        .feature_caps = g_wifi_feature_caps, \
+        .sta_disconnected_pm = 0,  \
+        .espnow_max_encrypt_num = CONFIG_ESP_WIFI_ESPNOW_MAX_ENCRYPT_NUM, \
+        .magic = WIFI_INIT_CONFIG_MAGIC\
+    };
     ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
-    ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
+    // ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
     ESP_ERROR_CHECK( esp_wifi_set_mode(ESPNOW_WIFI_MODE) );
     ESP_ERROR_CHECK( esp_wifi_start());
-    ESP_ERROR_CHECK( esp_wifi_set_channel(CONFIG_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE));
+    // ESP_ERROR_CHECK( esp_wifi_set_channel(CONFIG_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE));
 
-#if CONFIG_ESPNOW_ENABLE_LONG_RANGE
-    ESP_ERROR_CHECK( esp_wifi_set_protocol(ESPNOW_WIFI_IF, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G|WIFI_PROTOCOL_11N|WIFI_PROTOCOL_LR) );
-#endif
+// #if CONFIG_ESPNOW_ENABLE_LONG_RANGE
+   //  ESP_ERROR_CHECK( esp_wifi_set_protocol(ESPNOW_WIFI_IF, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G|WIFI_PROTOCOL_11N|WIFI_PROTOCOL_LR) );
+// #endif
 }
 
 /* ESPNOW sending or receiving callback function is called in WiFi task.
@@ -106,7 +132,8 @@ static void example_espnow_task()
     before = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
     
     int cnt = 0;
-    if (esp_now_send(s_example_broadcast_mac, s_example_broadcast_data, 6) != ESP_OK) {
+    int err_cnt = 0;
+    if (esp_now_send(s_example_peer_mac, s_example_broadcast_data, 1) != ESP_OK) {
         ESP_LOGE(TAG, "Send error");
         esp_now_bench_espnow_deinit();
         vTaskDelete(NULL);
@@ -116,12 +143,16 @@ static void example_espnow_task()
         switch (evt.id) {
             case EXAMPLE_ESPNOW_SEND_CB:
             {
+                if (evt.info.send_cb.status == 0) {
+                    err_cnt++;
+                }
                 cnt++;
                 gettimeofday(&tv_now, NULL);
                 after = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
                 dura = dura + (after - before);
                 if (cnt % 250 == 0) {
-                    ESP_LOGI(TAG, "avg send time: %lld us", dura / cnt);
+                    ESP_LOGI(TAG, "avg send time: %lld us, err: %d", dura / cnt, err_cnt);
+                    err_cnt = 0;
                 }
                 example_espnow_event_send_cb_t *send_cb = &evt.info.send_cb;
 
@@ -130,7 +161,7 @@ static void example_espnow_task()
                 gettimeofday(&tv_now, NULL);
                 before = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
                 /* Send the next data after the previous data is sent. */
-                if (esp_now_send(s_example_broadcast_mac, s_example_broadcast_data, 6) != ESP_OK) {
+                if (esp_now_send(s_example_peer_mac, s_example_broadcast_data, 1) != ESP_OK) {
                     ESP_LOGE(TAG, "Send error");
                     esp_now_bench_espnow_deinit();
                     vTaskDelete(NULL);
@@ -175,6 +206,8 @@ static esp_err_t esp_now_bench_espnow_init(void)
     peer->encrypt = false;
     memcpy(peer->peer_addr, s_example_broadcast_mac, ESP_NOW_ETH_ALEN);
     ESP_ERROR_CHECK( esp_now_add_peer(peer) );
+    memcpy(peer->peer_addr, s_example_peer_mac, ESP_NOW_ETH_ALEN);
+    ESP_ERROR_CHECK( esp_now_add_peer(peer) );
     free(peer);
 
     xTaskCreate(example_espnow_task, "example_espnow_task", 2048, NULL, 4, NULL);
@@ -190,14 +223,6 @@ static void esp_now_bench_espnow_deinit()
 
 void app_main(void)
 {
-    // Initialize NVS
-	esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK( nvs_flash_erase() );
-        ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK( ret );
-
     esp_now_bench_wifi_init();
     esp_now_bench_espnow_init();
 }
